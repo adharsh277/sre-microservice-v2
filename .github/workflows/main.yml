@@ -7,17 +7,18 @@ on:
 
 permissions:
   contents: read
-  packages: write   # Needed for GitHub Container Registry (GHCR)
+  packages: write
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-
+    outputs:
+      image: ghcr.io/${{ github.repository_owner }}/sre-microservice-v2:latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v2
         with:
           registry: ghcr.io
@@ -29,3 +30,58 @@ jobs:
 
       - name: Push Docker image
         run: docker push ghcr.io/${{ github.repository_owner }}/sre-microservice-v2:latest
+
+  deploy-to-aks:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Get AKS Credentials
+        run: az aks get-credentials --resource-group my-aks-rg --name my-aks-cluster --overwrite-existing
+
+      - name: Deploy v1
+        run: |
+          kubectl apply -f k8s/deployment-v1.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl rollout status deployment/sre-microservice-v1
+
+      - name: Health check v1
+        run: curl -f http://sre-microservice-service.default.svc.cluster.local/health
+
+      - name: Deploy v2 (Blue/Green)
+        run: |
+          kubectl apply -f k8s/deployment-v2.yaml
+          kubectl rollout status deployment/sre-microservice-v2
+          kubectl patch service sre-microservice-service -p '{"spec":{"selector":{"app":"sre-microservice","version":"v2"}}}'
+
+      - name: Health check v2
+        run: |
+          set -e
+          fails=0
+          for i in {1..5}; do
+            if ! curl -f http://sre-microservice-service.default.svc.cluster.local/health; then
+              ((fails++))
+            fi
+            sleep 2
+          done
+          if [ $fails -gt 2 ]; then
+            echo "Too many errors, failing..."
+            exit 1
+          fi
+
+      - name: Rollback if v2 fails
+        if: failure()
+        run: |
+          echo "Rolling back to v1..."
+          kubectl rollout undo deployment sre-microservice-v2
+          kubectl patch service sre-microservice-service -p '{"spec":{"selector":{"app":"sre-microservice","version":"v1"}}}'
