@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sre-microservice-v1
+  labels:
+    app: sre-microservice
+    version: v1
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sre-microservice
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: sre-microservice
+        version: v1
+    spec:
+      containers:
+        - name: sre-microservice
+          image: ghcr.io/adharsh277/sre-microservice-v2:latest
+          ports:
+            - containerPort: 5000
