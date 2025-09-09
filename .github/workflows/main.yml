@@ -55,8 +55,13 @@ jobs:
           kubectl apply -f k8s/service.yaml
           kubectl rollout status deployment/sre-microservice-v1
 
+      - name: Get Service External IP
+        run: |
+          EXTERNAL_IP=$(kubectl get svc sre-microservice-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "EXTERNAL_IP=$EXTERNAL_IP" >> $GITHUB_ENV
+
       - name: Health check v1
-        run: curl -f http://sre-microservice-service.default.svc.cluster.local/health
+        run: curl -f http://$EXTERNAL_IP/health
 
       - name: Deploy v2 (Blue/Green)
         run: |
@@ -69,7 +74,7 @@ jobs:
           set -e
           fails=0
           for i in {1..5}; do
-            if ! curl -f http://sre-microservice-service.default.svc.cluster.local/health; then
+            if ! curl -f http://$EXTERNAL_IP/health; then
               ((fails++))
             fi
             sleep 2
@@ -83,5 +88,5 @@ jobs:
         if: failure()
         run: |
           echo "Rolling back to v1..."
-          kubectl rollout undo deployment sre-microservice-v2
           kubectl patch service sre-microservice-service -p '{"spec":{"selector":{"app":"sre-microservice","version":"v1"}}}'
+
